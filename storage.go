@@ -149,6 +149,7 @@ func (s *PostgresStorage) DeleteAccount(id int) error {
 }
 
 // TODO: Implement UpdateAccount method
+// UpdateAccount updates an existing account in the database with the provided account details.
 func (s *PostgresStorage) UpdateAccount(account *Account) error {
 	return nil
 }

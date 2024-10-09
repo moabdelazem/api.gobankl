@@ -165,12 +165,8 @@ func (as *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) erro
 	}
 	defer r.Body.Close()
 
-	// // Get The Account By ID
-	// toAcc, err := as.store.GetAccountById(transferReq.ToAccountID)
-
-	// if err != nil {
-	// 	return err
-	// }
+	// TODO: Implement the transfer logic here
+	// For now, just return the transfer request as a response
 
 	return WriteJSON(w, http.StatusOK, transferReq)
 }
@@ -192,11 +188,11 @@ func (as *APIServer) Run() {
 
 	// Handle The Accounts Routes
 	subRouter.HandleFunc("/account", makeHTTPHandlerFunc(as.handleAccount))
-	subRouter.HandleFunc("/account/{id:[0-9]+}", makeHTTPHandlerFunc(as.handleGetAccountById)).Methods("GET")
-	subRouter.HandleFunc("/account/{id:[0-9]+}", makeHTTPHandlerFunc(as.handleDeleteAccount)).Methods("DELETE")
+	subRouter.HandleFunc("/account/{id:[0-9]+}", makeHTTPHandlerFunc(as.handleGetAccountById)).Methods(http.MethodGet)
+	subRouter.HandleFunc("/account/{id:[0-9]+}", makeHTTPHandlerFunc(as.handleDeleteAccount)).Methods(http.MethodDelete)
 
 	// Handle The Transfer Route
-	subRouter.HandleFunc("/transfer", makeHTTPHandlerFunc(as.handleTransfer))
+	subRouter.HandleFunc("/transfer", makeHTTPHandlerFunc(as.handleTransfer)).Methods(http.MethodPost)
 
 	// Run The HTTPServer
 
