@@ -57,6 +57,10 @@ func (as *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error
 // Returns:
 //   - error: An error if there is an issue retrieving the accounts or writing the response.
 func (as *APIServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) error {
+	// Check The Method
+	if r.Method != http.MethodGet {
+		return fmt.Errorf("Method Not Allowed: %s", r.Method)
+	}
 	// Get All Accounts From The Store
 	accs, err := as.store.GetAccounts()
 
@@ -201,6 +205,10 @@ func (as *APIServer) Run() {
 	http.ListenAndServe(as.listenAddr, router)
 }
 
+func (as *APIServer) GracefulShutdown() {
+	// TODO: Implement graceful shutdown
+}
+
 // apiFunc is a type definition for a function that takes an http.ResponseWriter
 // and an *http.Request as parameters and returns an error. This type is used
 // to define the signature of API handler functions in the application.
@@ -226,9 +234,7 @@ type APIError struct {
 func makeHTTPHandlerFunc(f apiFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := f(w, r); err != nil {
-			WriteJSON(w, http.StatusBadRequest, APIError{
-				Error: err.Error(),
-			})
+			WriteError(w, http.StatusBadRequest, err.Error())
 		}
 	}
 }
@@ -272,4 +278,10 @@ func getId(w http.ResponseWriter, r *http.Request) int {
 	}
 
 	return idInt
+}
+
+// WriteError writes an error message as a JSON response with the specified status code.
+// The error message is formatted as a map with a single key "error" containing the provided message.
+func WriteError(w http.ResponseWriter, status int, message string) {
+	WriteJSON(w, status, APIError{Error: message})
 }
