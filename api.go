@@ -7,8 +7,15 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
 )
+
+// !FOR TESTING PURPOSES ONLY!
+// !DELETE THIS CONST IN PRODUCTION!
+// !JWT Token
+const JWTToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmb28iOiJiYXIiLCJuYmYiOjE0NDQ0Nzg0MDB9.u1riaD1rW97opCoAuRCTy4w58Br-Zk-bh7vLiRIsrpU"
 
 // API Server
 type APIServer struct {
@@ -186,13 +193,14 @@ func (as *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) erro
 //
 // The server listens on the address specified in the APIServer's listenAddr field.
 func (as *APIServer) Run() {
+
 	// Create The Router and SubRouter
 	router := mux.NewRouter()
 	subRouter := router.PathPrefix("/api/v1").Subrouter()
 
 	// Handle The Accounts Routes
 	subRouter.HandleFunc("/account", makeHTTPHandlerFunc(as.handleAccount))
-	subRouter.HandleFunc("/account/{id:[0-9]+}", makeHTTPHandlerFunc(as.handleGetAccountById)).Methods(http.MethodGet)
+	subRouter.HandleFunc("/account/{id:[0-9]+}", withJWTAuth(makeHTTPHandlerFunc(as.handleGetAccountById))).Methods(http.MethodGet)
 	subRouter.HandleFunc("/account/{id:[0-9]+}", makeHTTPHandlerFunc(as.handleDeleteAccount)).Methods(http.MethodDelete)
 
 	// Handle The Transfer Route
@@ -237,6 +245,22 @@ func makeHTTPHandlerFunc(f apiFunc) http.HandlerFunc {
 			WriteError(w, http.StatusBadRequest, err.Error())
 		}
 	}
+}
+
+func validateJWTToken(tokenString string) (*jwt.Token, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("Invalid Signing Method")
+		}
+
+		return []byte(JWTToken), nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return token, nil
 }
 
 // WriteJSON writes the given data as a JSON response with the specified HTTP status code.
@@ -284,4 +308,31 @@ func getId(w http.ResponseWriter, r *http.Request) int {
 // The error message is formatted as a map with a single key "error" containing the provided message.
 func WriteError(w http.ResponseWriter, status int, message string) {
 	WriteJSON(w, status, APIError{Error: message})
+}
+
+func withJWTAuth(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Load The Environment Variables
+		if err := godotenv.Load(); err != nil {
+			log.Fatalf("Error Loading Environment Variables: %s", err)
+		}
+
+		// Get The Token From The Authorization Header
+		tokenString := r.Header.Get("Authorization")
+
+		if tokenString == "" {
+			WriteError(w, http.StatusUnauthorized, "Missing Authorization Header")
+			return
+		}
+
+		_, err := validateJWTToken(tokenString)
+
+		if err != nil {
+			WriteError(w, http.StatusUnauthorized, "Invalid Token")
+			return
+		}
+
+		fmt.Println("JWT Auth Middleware")
+		handler(w, r)
+	}
 }
