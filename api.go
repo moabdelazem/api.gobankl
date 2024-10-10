@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -12,10 +13,11 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// !FOR TESTING PURPOSES ONLY!
-// !DELETE THIS CONST IN PRODUCTION!
-// !JWT Token
-const JWTToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmb28iOiJiYXIiLCJuYmYiOjE0NDQ0Nzg0MDB9.u1riaD1rW97opCoAuRCTy4w58Br-Zk-bh7vLiRIsrpU"
+// * Use The JWT Secret From The Environment Variables
+var (
+	JWTSecret      = os.Getenv("JWT_SECRET")
+	JWTTokenExpire = os.Getenv("JWT_TOKEN_EXPIRE")
+)
 
 // API Server
 type APIServer struct {
@@ -49,7 +51,7 @@ func (as *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error
 	case "DELETE":
 		return as.handleDeleteAccount(w, r)
 	default:
-		return fmt.Errorf("Method Is Not Allowed: %s", r.Method)
+		return fmt.Errorf("method is not allowed: %s", r.Method)
 	}
 }
 
@@ -66,7 +68,7 @@ func (as *APIServer) handleAccount(w http.ResponseWriter, r *http.Request) error
 func (as *APIServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) error {
 	// Check The Method
 	if r.Method != http.MethodGet {
-		return fmt.Errorf("Method Not Allowed: %s", r.Method)
+		return fmt.Errorf("method not allowed: %s", r.Method)
 	}
 	// Get All Accounts From The Store
 	accs, err := as.store.GetAccounts()
@@ -100,6 +102,17 @@ func (as *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request)
 
 	// Create The Account
 	acc := NewAccount(accReq.FirstName, accReq.LastName)
+
+	// Create The JWT Token
+	token, err := createJWT(acc)
+
+	if err != nil {
+		return err
+	}
+
+	// !TESTING
+	// !DELETE THIS IN PRODUCTION
+	fmt.Printf("JWT Token: %s\nUser : %d", token, acc.Number)
 
 	// Store The Account in The Database
 	if err := as.store.CreateAccount(acc); err != nil {
@@ -193,14 +206,13 @@ func (as *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) erro
 //
 // The server listens on the address specified in the APIServer's listenAddr field.
 func (as *APIServer) Run() {
-
 	// Create The Router and SubRouter
 	router := mux.NewRouter()
 	subRouter := router.PathPrefix("/api/v1").Subrouter()
 
 	// Handle The Accounts Routes
 	subRouter.HandleFunc("/account", makeHTTPHandlerFunc(as.handleAccount))
-	subRouter.HandleFunc("/account/{id:[0-9]+}", withJWTAuth(makeHTTPHandlerFunc(as.handleGetAccountById))).Methods(http.MethodGet)
+	subRouter.HandleFunc("/account/{id:[0-9]+}", withJWTAuth(makeHTTPHandlerFunc(as.handleGetAccountById), as.store)).Methods(http.MethodGet)
 	subRouter.HandleFunc("/account/{id:[0-9]+}", makeHTTPHandlerFunc(as.handleDeleteAccount)).Methods(http.MethodDelete)
 
 	// Handle The Transfer Route
@@ -213,6 +225,7 @@ func (as *APIServer) Run() {
 	http.ListenAndServe(as.listenAddr, router)
 }
 
+// GracefulShutdown performs a graceful shutdown of the API server.
 func (as *APIServer) GracefulShutdown() {
 	// TODO: Implement graceful shutdown
 }
@@ -245,22 +258,6 @@ func makeHTTPHandlerFunc(f apiFunc) http.HandlerFunc {
 			WriteError(w, http.StatusBadRequest, err.Error())
 		}
 	}
-}
-
-func validateJWTToken(tokenString string) (*jwt.Token, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Invalid Signing Method")
-		}
-
-		return []byte(JWTToken), nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return token, nil
 }
 
 // WriteJSON writes the given data as a JSON response with the specified HTTP status code.
@@ -310,29 +307,83 @@ func WriteError(w http.ResponseWriter, status int, message string) {
 	WriteJSON(w, status, APIError{Error: message})
 }
 
-func withJWTAuth(handler http.HandlerFunc) http.HandlerFunc {
+func withJWTAuth(handler http.HandlerFunc, store Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Load The Environment Variables
 		if err := godotenv.Load(); err != nil {
-			log.Fatalf("Error Loading Environment Variables: %s", err)
+			log.Fatalf("error loading environment variables: %s", err)
 		}
 
 		// Get The Token From The Authorization Header
 		tokenString := r.Header.Get("Authorization")
 
 		if tokenString == "" {
-			WriteError(w, http.StatusUnauthorized, "Missing Authorization Header")
+			WriteError(w, http.StatusUnauthorized, "missing authorization header")
 			return
 		}
 
-		_, err := validateJWTToken(tokenString)
+		token, err := validateJWTToken(tokenString)
 
 		if err != nil {
-			WriteError(w, http.StatusUnauthorized, "Invalid Token")
+			WriteError(w, http.StatusUnauthorized, "permission denied")
+			return
+		}
+		if !token.Valid {
+			WriteError(w, http.StatusUnauthorized, "permission denied")
 			return
 		}
 
-		fmt.Println("JWT Auth Middleware")
+		usrId := getId(w, r)
+		account, err := store.GetAccountById(usrId)
+
+		if err != nil {
+			WriteError(w, http.StatusUnauthorized, "something wrong with the account")
+			return
+		}
+
+		claims := token.Claims.(jwt.MapClaims)
+
+		if account.Number != int64(claims["account_number"].(float64)) {
+			WriteError(w, http.StatusUnauthorized, "permission denied")
+			return
+		}
+
 		handler(w, r)
 	}
+}
+
+// createJWT generates a JWT token for the given account.
+// The token includes claims for the account number and expiration time.
+//
+// Parameters:
+//   - account: A pointer to the Account struct containing account details.
+//
+// Returns:
+//   - A signed JWT token as a string.
+//   - An error if there is an issue signing the token.
+func createJWT(account *Account) (string, error) {
+	claims := jwt.MapClaims{
+		"expires":        JWTTokenExpire,
+		"account_number": account.Number,
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	return token.SignedString([]byte(JWTSecret))
+}
+
+func validateJWTToken(tokenString string) (*jwt.Token, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("invalid signing method")
+		}
+
+		return []byte(JWTSecret), nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return token, nil
 }
