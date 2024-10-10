@@ -322,14 +322,25 @@ func withJWTAuth(handler http.HandlerFunc, store Storage) http.HandlerFunc {
 			return
 		}
 
+		// Remove "Bearer " prefix if present
+		if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
+			tokenString = tokenString[7:]
+		}
+
 		token, err := validateJWTToken(tokenString)
 
 		if err != nil {
-			WriteError(w, http.StatusUnauthorized, "permission denied")
+			WriteError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
 		if !token.Valid {
-			WriteError(w, http.StatusUnauthorized, "permission denied")
+			WriteError(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
+
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok || claims["account_number"] == nil {
+			WriteError(w, http.StatusUnauthorized, "invalid token claims")
 			return
 		}
 
@@ -337,11 +348,9 @@ func withJWTAuth(handler http.HandlerFunc, store Storage) http.HandlerFunc {
 		account, err := store.GetAccountById(usrId)
 
 		if err != nil {
-			WriteError(w, http.StatusUnauthorized, "something wrong with the account")
+			WriteError(w, http.StatusUnauthorized, "account not found")
 			return
 		}
-
-		claims := token.Claims.(jwt.MapClaims)
 
 		if account.Number != int64(claims["account_number"].(float64)) {
 			WriteError(w, http.StatusUnauthorized, "permission denied")
@@ -372,6 +381,15 @@ func createJWT(account *Account) (string, error) {
 	return token.SignedString([]byte(JWTSecret))
 }
 
+// validateJWTToken validates a JWT token string and returns the parsed token if valid.
+// It uses the HMAC signing method and a predefined secret key for validation.
+//
+// Parameters:
+//   - tokenString: The JWT token string to be validated.
+//
+// Returns:
+//   - *jwt.Token: The parsed JWT token if validation is successful.
+//   - error: An error if the token is invalid or if there is an issue during parsing.
 func validateJWTToken(tokenString string) (*jwt.Token, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
